@@ -1,0 +1,526 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { MapContainer, TileLayer, Marker, Circle, Popup } from "react-leaflet";
+import L from "leaflet";
+import "./MapView.css";
+
+const DEFAULT_LOCATION = { latitude: 40.7128, longitude: -74.0060 };
+const MAX_RENDERED_ZONES = 150;
+const RADIUS_COMMIT_DELAY_MS = 180;
+const LOCATION_ZOOM_LEVEL = 15;
+const LOCATION_EPSILON = 0.00001;
+
+// Pulsing blue-dot marker for precise current location.
+const exactLocationIcon = L.divIcon({
+  className: "exact-location-marker",
+  html: '<span class="exact-location-dot"></span><span class="exact-location-pulse"></span>',
+  iconSize: [18, 18],
+  iconAnchor: [9, 9],
+  popupAnchor: [0, -12],
+});
+
+// Risk level colors
+const riskColors = {
+  critical: "#dc2626",
+  high: "#ea580c",
+  medium: "#f59e0b",
+  low: "#fbbf24",
+};
+
+const toRadians = (value) => (value * Math.PI) / 180;
+
+const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
+  const earthRadius = 6371000;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadius * c;
+};
+
+const formatPercent = (value) =>
+  Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "N/A";
+
+function MapView() {
+  const [userLocation, setUserLocation] = useState(null);
+  const [locationAccuracy, setLocationAccuracy] = useState(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
+  const [allRiskZones, setAllRiskZones] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [searchRadius, setSearchRadius] = useState(5000);
+  const [sliderRadius, setSliderRadius] = useState(5000);
+  const mapRef = useRef(null);
+  const mapCanvasRef = useRef(null);
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setSearchRadius(sliderRadius);
+    }, RADIUS_COMMIT_DELAY_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [sliderRadius]);
+
+  useEffect(() => {
+    let isActive = true;
+    let watchId;
+
+    const updateUserLocation = ({ latitude, longitude, accuracy }) => {
+      setUserLocation((previous) => {
+        if (
+          previous &&
+          Math.abs(previous.latitude - latitude) < LOCATION_EPSILON &&
+          Math.abs(previous.longitude - longitude) < LOCATION_EPSILON
+        ) {
+          return previous;
+        }
+
+        return { latitude, longitude };
+      });
+
+      setLocationAccuracy(Number.isFinite(accuracy) ? Math.round(accuracy) : null);
+    };
+
+    const setFallbackLocation = () => {
+      if (!isActive) return;
+      setError("Unable to access your location. Using default location.");
+      setUserLocation(DEFAULT_LOCATION);
+      setLocationAccuracy(null);
+    };
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          if (!isActive) return;
+          const { latitude, longitude, accuracy } = position.coords;
+          updateUserLocation({ latitude, longitude, accuracy });
+          setError(null);
+        },
+        () => {
+          setFallbackLocation();
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 30000,
+        }
+      );
+
+      watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          if (!isActive) return;
+          const { latitude, longitude, accuracy } = position.coords;
+          updateUserLocation({ latitude, longitude, accuracy });
+        },
+        () => {},
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 10000,
+        }
+      );
+    } else {
+      setFallbackLocation();
+    }
+
+    return () => {
+      isActive = false;
+      if (watchId !== undefined) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!userLocation) return;
+
+    let isActive = true;
+
+    const fetchRiskZones = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch("http://localhost:8000/api/risk/all");
+        if (!response.ok) {
+          throw new Error("Failed to fetch risk zones");
+        }
+
+        const data = await response.json();
+        if (!isActive) return;
+
+        setAllRiskZones(Array.isArray(data) ? data : []);
+        setError(null);
+      } catch (fetchError) {
+        if (!isActive) return;
+        console.error("Error fetching risk zones:", fetchError);
+        setError("Failed to load risk zones");
+        setAllRiskZones([]);
+      } finally {
+        if (isActive) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchRiskZones();
+
+    return () => {
+      isActive = false;
+    };
+  }, [userLocation]);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+
+    const map = mapRef.current;
+    const invalidateMapSize = () => {
+      map.invalidateSize({ animate: false });
+    };
+
+    const animationFrame = requestAnimationFrame(invalidateMapSize);
+    const immediate = setTimeout(invalidateMapSize, 0);
+    const delayed = setTimeout(invalidateMapSize, 350);
+    const delayedSecond = setTimeout(invalidateMapSize, 900);
+
+    let resizeObserver;
+    if (mapCanvasRef.current && typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        invalidateMapSize();
+      });
+      resizeObserver.observe(mapCanvasRef.current);
+    }
+
+    window.addEventListener("resize", invalidateMapSize);
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      clearTimeout(immediate);
+      clearTimeout(delayed);
+      clearTimeout(delayedSecond);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      window.removeEventListener("resize", invalidateMapSize);
+    };
+  }, [mapReady]);
+
+  const nearbyRiskZones = useMemo(() => {
+    if (!userLocation) return [];
+
+    return allRiskZones
+      .filter((zone) =>
+        zone?.location &&
+        Number.isFinite(zone.location.lat) &&
+        Number.isFinite(zone.location.lon)
+      )
+      .map((zone) => ({
+        ...zone,
+        distance: getDistanceInMeters(
+          userLocation.latitude,
+          userLocation.longitude,
+          zone.location.lat,
+          zone.location.lon
+        ),
+      }))
+      .filter((zone) => zone.distance <= searchRadius)
+      .sort((a, b) => a.distance - b.distance);
+  }, [allRiskZones, searchRadius, userLocation]);
+
+  const renderedRiskZones = useMemo(
+    () => nearbyRiskZones.slice(0, MAX_RENDERED_ZONES),
+    [nearbyRiskZones]
+  );
+
+  const stats = useMemo(
+    () =>
+      nearbyRiskZones.reduce(
+        (acc, zone) => {
+          const level = (zone.riskLevel || "").toLowerCase();
+          if (level === "critical") acc.critical += 1;
+          if (level === "high") acc.high += 1;
+          if (level === "medium") acc.medium += 1;
+          if (level === "low") acc.low += 1;
+          return acc;
+        },
+        { critical: 0, high: 0, medium: 0, low: 0 }
+      ),
+    [nearbyRiskZones]
+  );
+
+  const userPosition = useMemo(
+    () => [userLocation?.latitude, userLocation?.longitude],
+    [userLocation]
+  );
+
+  const handleRadiusChange = (newRadius) => {
+    setSliderRadius(newRadius);
+  };
+
+  const moveMapToLocation = (latitude, longitude) => {
+    if (!mapRef.current) return;
+
+    const nextZoom = Math.max(mapRef.current.getZoom(), LOCATION_ZOOM_LEVEL);
+    mapRef.current.flyTo([latitude, longitude], nextZoom, {
+      animate: true,
+      duration: 0.85,
+    });
+  };
+
+  const handleRecenter = () => {
+    if (!navigator.geolocation) {
+      setError("Geolocation is not supported in this browser.");
+      if (userLocation) {
+        moveMapToLocation(userLocation.latitude, userLocation.longitude);
+      }
+      return;
+    }
+
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        setUserLocation({ latitude, longitude });
+        setLocationAccuracy(Number.isFinite(accuracy) ? Math.round(accuracy) : null);
+        setError(null);
+        moveMapToLocation(latitude, longitude);
+        setIsLocating(false);
+      },
+      () => {
+        setIsLocating(false);
+        setError("Unable to refresh your location right now.");
+        if (userLocation) {
+          moveMapToLocation(userLocation.latitude, userLocation.longitude);
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 12000,
+        maximumAge: 0,
+      }
+    );
+  };
+
+  if (!userLocation) {
+    return <div className="map-container"><p>Getting your location...</p></div>;
+  }
+
+  return (
+    <div className="map-wrapper">
+      <div className="map-sidebar left-sidebar">
+        <div className="sidebar-content">
+          <h3>Your Location</h3>
+          <div className="location-info">
+            <p><strong>Latitude:</strong> {userLocation.latitude.toFixed(4)}</p>
+            <p><strong>Longitude:</strong> {userLocation.longitude.toFixed(4)}</p>
+            {Number.isFinite(locationAccuracy) && (
+              <p><strong>Accuracy:</strong> ~{locationAccuracy} m</p>
+            )}
+          </div>
+
+          <h3>Search Radius</h3>
+          <div className="radius-control">
+            <input
+              type="range"
+              min="1000"
+              max="50000"
+              step="1000"
+              value={sliderRadius}
+              onChange={(e) => handleRadiusChange(Number(e.target.value))}
+              className="radius-slider"
+            />
+            <p className="radius-display">{(sliderRadius / 1000).toFixed(1)} km</p>
+            {sliderRadius !== searchRadius && (
+              <p className="radius-syncing">Updating map...</p>
+            )}
+          </div>
+
+          <h3>Risk Zones ({nearbyRiskZones.length})</h3>
+          {error && <p className="error-message">{error}</p>}
+          <div className="risk-zones-list">
+            {loading ? (
+              <p>Loading risk zones...</p>
+            ) : nearbyRiskZones.length > 0 ? (
+              nearbyRiskZones.map((zone) => (
+                <div
+                  key={zone._id || `${zone.name}-${zone.location.lat}-${zone.location.lon}`}
+                  className={`risk-zone-item level-${zone.riskLevel?.toLowerCase()}`}
+                >
+                  <h4>{zone.name}</h4>
+                  <p className="risk-level">
+                    Risk: <span className="badge">{zone.riskLevel}</span>
+                  </p>
+                  <p className="distance">Distance: {zone.distance ? (zone.distance / 1000).toFixed(2) + " km" : "N/A"}</p>
+                  <p className="description">{zone.description}</p>
+                </div>
+              ))
+            ) : (
+              <p className="no-zones">No risk zones found in this area</p>
+            )}
+
+            {nearbyRiskZones.length > MAX_RENDERED_ZONES && (
+              <p className="map-performance-note">
+                Showing the nearest {MAX_RENDERED_ZONES} zones on the map for smoother performance.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="map-canvas" ref={mapCanvasRef}>
+        <MapContainer
+          center={userPosition}
+          zoom={11}
+          className="map-container"
+          preferCanvas={true}
+          zoomAnimation={false}
+          fadeAnimation={false}
+          markerZoomAnimation={false}
+          wheelDebounceTime={80}
+          whenReady={(event) => {
+            mapRef.current = event.target;
+            setMapReady(true);
+          }}
+        >
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            updateWhenIdle={true}
+            keepBuffer={2}
+            maxZoom={19}
+            subdomains={["a", "b", "c"]}
+          />
+
+          {Number.isFinite(locationAccuracy) && (
+            <Circle
+              center={userPosition}
+              radius={Math.max(locationAccuracy, 12)}
+              fillColor="rgba(37, 99, 235, 0.2)"
+              color="rgba(37, 99, 235, 0.42)"
+              weight={1}
+              opacity={0.8}
+              fillOpacity={0.24}
+            />
+          )}
+
+          {/* User location marker */}
+          <Marker position={userPosition} icon={exactLocationIcon}>
+            <Popup>
+              <div className="popup-content">
+                <h4>Your Location</h4>
+                <p>Lat: {userLocation.latitude.toFixed(4)}</p>
+                <p>Lon: {userLocation.longitude.toFixed(4)}</p>
+                {Number.isFinite(locationAccuracy) && (
+                  <p>Accuracy: ~{locationAccuracy} m</p>
+                )}
+              </div>
+            </Popup>
+          </Marker>
+
+          {/* Search radius circle */}
+          <Circle
+            center={userPosition}
+            radius={searchRadius}
+            fillColor="rgba(37, 99, 235, 0.12)"
+            color="rgba(37, 99, 235, 0.55)"
+            weight={2}
+            dashArray="5, 5"
+          />
+
+          {/* Risk zone markers and circles */}
+          {renderedRiskZones.map((zone) => {
+            const level = zone.riskLevel?.toLowerCase();
+            const color = riskColors[level] || riskColors.low;
+
+            return (
+              <Circle
+                key={zone._id || `${zone.name}-${zone.location.lat}-${zone.location.lon}`}
+                center={[zone.location.lat, zone.location.lon]}
+                radius={zone.geofenceRadius || 500}
+                fillColor={color}
+                color={color}
+                weight={2}
+                opacity={0.8}
+                fillOpacity={0.32}
+              >
+                <Popup>
+                  <div className="popup-content">
+                    <h4>{zone.name}</h4>
+                    <p><strong>Risk Level:</strong> <span className={`risk-badge level-${level}`}>{zone.riskLevel}</span></p>
+                    <p><strong>Risk Score:</strong> {formatPercent(zone.riskScore)}</p>
+                    <p><strong>Crime Rate:</strong> {formatPercent(zone.crimeRate)}</p>
+                    <p><strong>Tourist Density:</strong> {zone.tourist_density ?? "N/A"}</p>
+                    <p><strong>Location:</strong> {zone.location.lat.toFixed(4)}, {zone.location.lon.toFixed(4)}</p>
+                    {zone.distance && <p><strong>Distance:</strong> {(zone.distance / 1000).toFixed(2)} km</p>}
+                  </div>
+                </Popup>
+              </Circle>
+            );
+          })}
+        </MapContainer>
+
+        <button
+          type="button"
+          className="recenter-button"
+          onClick={handleRecenter}
+          disabled={isLocating}
+        >
+          {isLocating ? "Locating..." : "My Location"}
+        </button>
+      </div>
+
+      <div className="map-sidebar right-sidebar">
+        <div className="sidebar-content">
+          <h3>Map Legend</h3>
+          <div className="legend">
+            <div className="legend-item">
+              <div className="legend-color critical"></div>
+              <span>Critical Risk</span>
+            </div>
+            <div className="legend-item">
+              <div className="legend-color high"></div>
+              <span>High Risk</span>
+            </div>
+            <div className="legend-item">
+              <div className="legend-color medium"></div>
+              <span>Medium Risk</span>
+            </div>
+            <div className="legend-item">
+              <div className="legend-color low"></div>
+              <span>Low Risk</span>
+            </div>
+          </div>
+
+          <h3>Statistics</h3>
+          <div className="stats">
+            <div className="stat-card stat-total">
+              <p className="stat-label">Total Zones</p>
+              <p className="stat-value">{nearbyRiskZones.length}</p>
+            </div>
+            <div className="stat-card stat-critical">
+              <p className="stat-label">Critical</p>
+              <p className="stat-value critical-count">{stats.critical}</p>
+            </div>
+            <div className="stat-card stat-high">
+              <p className="stat-label">High</p>
+              <p className="stat-value high-count">{stats.high}</p>
+            </div>
+            <div className="stat-card stat-medium">
+              <p className="stat-label">Medium</p>
+              <p className="stat-value medium-count">{stats.medium}</p>
+            </div>
+            <div className="stat-card stat-low">
+              <p className="stat-label">Low</p>
+              <p className="stat-value low-count">{stats.low}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default MapView;
