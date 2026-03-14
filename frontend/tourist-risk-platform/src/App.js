@@ -9,6 +9,7 @@ import EmergencyPage from "./pages/EmergencyPage";
 import IncidentPage from "./pages/IncidentPage";
 import Dashboard from "./pages/Dashboard";
 import AdminLogin from "./pages/AdminLogin";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 function App() {
   useEffect(() => {
@@ -22,14 +23,16 @@ function App() {
   }, []);
 
   return (
-    <Routes>
-      <Route path="/" element={<Home />} />
-      <Route path="/map" element={<MapPage />} />
-      <Route path="/emergency" element={<EmergencyPage />} />
-      <Route path="/incident" element={<IncidentPage />} />
-      <Route path="/admin/login" element={<AdminLogin />} />
-      <Route path="/admin" element={<Dashboard />} />
-    </Routes>
+    <ErrorBoundary>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/map" element={<MapPage />} />
+        <Route path="/emergency" element={<EmergencyPage />} />
+        <Route path="/incident" element={<IncidentPage />} />
+        <Route path="/admin/login" element={<AdminLogin />} />
+        <Route path="/admin" element={<Dashboard />} />
+      </Routes>
+    </ErrorBoundary>
   );
 }
 

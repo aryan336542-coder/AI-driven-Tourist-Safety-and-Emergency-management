@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, Circle, Popup } from "react-leaflet";
 import L from "leaflet";
+import { getRiskZones } from "../services/api";
 import "./MapView.css";
 
 const DEFAULT_LOCATION = { latitude: 40.7128, longitude: -74.0060 };
@@ -117,7 +118,11 @@ function MapView() {
           const { latitude, longitude, accuracy } = position.coords;
           updateUserLocation({ latitude, longitude, accuracy });
         },
-        () => {},
+        (error) => {
+          if (!isActive) return;
+          console.error("Location watch error:", error);
+          setError(`Location tracking error: ${error.message}`);
+        },
         {
           enableHighAccuracy: true,
           timeout: 15000,
@@ -144,15 +149,10 @@ function MapView() {
     const fetchRiskZones = async () => {
       try {
         setLoading(true);
-        const response = await fetch("http://localhost:8000/api/risk/all");
-        if (!response.ok) {
-          throw new Error("Failed to fetch risk zones");
-        }
-
-        const data = await response.json();
+        const response = await getRiskZones();
         if (!isActive) return;
 
-        setAllRiskZones(Array.isArray(data) ? data : []);
+        setAllRiskZones(Array.isArray(response.data) ? response.data : []);
         setError(null);
       } catch (fetchError) {
         if (!isActive) return;

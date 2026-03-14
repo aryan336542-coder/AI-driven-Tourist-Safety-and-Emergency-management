@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import Navbar from "../components/Navbar";
+import { getIncidents, getEmergencies, getRiskZones } from "../services/api";
 import "./Dashboard.css";
 
 function Dashboard() {
@@ -10,6 +11,7 @@ function Dashboard() {
   const [emergencies, setEmergencies] = useState([]);
   const [riskZones, setRiskZones] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     // Check if admin is logged in
@@ -22,48 +24,28 @@ function Dashboard() {
     }
 
     setAdminName(name || "Admin");
-    fetchDashboardData(token);
+    fetchDashboardData();
   }, [navigate]);
 
-  const fetchDashboardData = async (token) => {
+  const fetchDashboardData = async () => {
     try {
+      setLoading(true);
+
       // Fetch incidents
-      const incidentRes = await fetch("http://localhost:8000/api/incidents/all", {
-        headers: {
-          "Authorization": `Bearer ${token}`
-        }
-      });
+      const incidentRes = await getIncidents();
+      setIncidents(incidentRes.data);
 
       // Fetch emergencies
-      const emergencyRes = await fetch("http://localhost:8000/api/emergency/all", {
-        headers: {
-          "Authorization": `Bearer ${token}`
-        }
-      });
+      const emergencyRes = await getEmergencies();
+      setEmergencies(emergencyRes.data);
 
       // Fetch risk zones
-      const riskRes = await fetch("http://localhost:8000/api/risk/all", {
-        headers: {
-          "Authorization": `Bearer ${token}`
-        }
-      });
+      const riskRes = await getRiskZones();
+      setRiskZones(riskRes.data);
 
-      if (incidentRes.ok) {
-        const data = await incidentRes.json();
-        setIncidents(data);
-      }
-
-      if (emergencyRes.ok) {
-        const data = await emergencyRes.json();
-        setEmergencies(data);
-      }
-
-      if (riskRes.ok) {
-        const data = await riskRes.json();
-        setRiskZones(data);
-      }
     } catch (error) {
       console.error("Error fetching dashboard data:", error);
+      setError("Failed to load dashboard data. Please refresh the page.");
     } finally {
       setLoading(false);
     }
@@ -79,6 +61,7 @@ function Dashboard() {
   return (
     <div>
       <Navbar />
+      {error && <div style={{ background: "#f8d7da", color: "#721c24", padding: "10px 20px", margin: "10px", borderRadius: "4px" }}>{error}</div>}
       <div className="page-container">
         <div className="dashboard-header">
           <div>

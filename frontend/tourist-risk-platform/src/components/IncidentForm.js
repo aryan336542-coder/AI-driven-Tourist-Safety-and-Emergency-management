@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { getCurrentLocation, getDeviceId } from "../services/geolocation";
+import { reportIncident } from "../services/api";
 
 function IncidentForm() {
   const [formData, setFormData] = useState({
@@ -61,31 +62,19 @@ function IncidentForm() {
     }
 
     try {
-      const response = await fetch("http://localhost:8000/api/incidents/report", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(formData)
+      await reportIncident(formData);
+
+      setSuccess(true);
+      setFormData({
+        deviceId: getDeviceId(),
+        location: { lat: null, lon: null },
+        description: "",
+        incidentType: "other"
       });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setSuccess(true);
-        setFormData({
-          deviceId: getDeviceId(),
-          location: { lat: null, lon: null },
-          description: "",
-          incidentType: "other"
-        });
-        setLocationStatus("Click 'Get Location' to enable tracking");
-        setTimeout(() => setSuccess(false), 3000);
-      } else {
-        setError(data.message || "Failed to report incident");
-      }
+      setLocationStatus("Click 'Get Location' to enable tracking");
+      setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
-      setError("Error reporting incident: " + err.message);
+      setError("Error reporting incident: " + (err.response?.data?.message || err.message));
     } finally {
       setLoading(false);
     }

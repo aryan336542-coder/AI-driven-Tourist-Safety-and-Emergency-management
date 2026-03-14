@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import Navbar from "../components/Navbar";
+import { adminLogin } from "../services/api";
 import "./AdminLogin.css";
 
 function AdminLogin() {
@@ -16,29 +17,16 @@ function AdminLogin() {
     setLoading(true);
 
     try {
-      const response = await fetch("http://localhost:8000/api/admin/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ email, password })
-      });
+      const response = await adminLogin(email, password);
 
-      const data = await response.json();
-
-      if (response.ok) {
-        // Store token and admin info
-        localStorage.setItem("adminToken", data.token);
-        localStorage.setItem("adminId", data.admin.id);
-        localStorage.setItem("adminName", data.admin.name);
-        
-        navigate("/admin");
-      } else {
-        setError(data.message || "Login failed");
-      }
+      // Store token and admin info
+      localStorage.setItem("adminToken", response.data.token);
+      localStorage.setItem("adminId", response.data._id);
+      localStorage.setItem("adminName", response.data.name);
+      
+      navigate("/admin");
     } catch (err) {
-      setError("Error connecting to server. Please try again.");
-      console.error(err);
+      setError(err.response?.data?.message || "Login failed");
     } finally {
       setLoading(false);
     }

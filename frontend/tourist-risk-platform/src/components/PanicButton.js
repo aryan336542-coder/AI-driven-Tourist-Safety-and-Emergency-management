@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { getCurrentLocation, getDeviceId } from "../services/geolocation";
+import { triggerEmergency } from "../services/api";
 import "./PanicButton.css";
 
-function PanicButton() {
+function PanicButton({ emergencyType = "danger", message = "Emergency SOS Alert Triggered - Tourist in distress", buttonText = "🆘 EMERGENCY SOS" }) {
   const [isTriggered, setIsTriggered] = useState(false);
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(3);
@@ -43,29 +44,16 @@ function PanicButton() {
       const emergencyData = {
         deviceId,
         location,
-        emergencyType: "danger",
-        message: "Emergency SOS Alert Triggered - Tourist in distress",
-        status: "active"
+        emergencyType,
+        message
       };
 
-      const response = await fetch("http://localhost:8000/api/emergency/panic", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(emergencyData)
-      });
+      await triggerEmergency(emergencyData);
 
-      if (response.ok) {
-        setIsTriggered(true);
-        await response.json();
-        setTimeout(() => setIsTriggered(false), 3000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.message || "Failed to send emergency alert");
-      }
+      setIsTriggered(true);
+      setTimeout(() => setIsTriggered(false), 3000);
     } catch (err) {
-      setError("Error: " + err.message);
+      setError("Error: " + (err.response?.data?.message || err.message));
     } finally {
       setLoading(false);
     }
@@ -82,6 +70,7 @@ function PanicButton() {
         onMouseLeave={handleMouseUp}
         onTouchStart={handleMouseDown}
         onTouchEnd={handleMouseUp}
+        onTouchCancel={handleMouseUp}
         disabled={loading || isTriggered}
       >
         {loading ? (
